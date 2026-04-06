@@ -1,0 +1,33 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          enabled: true
+          lower-case-service-id: true
+      routes:
+        - id: user-service-route
+          uri: lb://user-service
+          predicates:
+            - Path=/api/v1/**,/swagger-ui/**,/v3/api-docs/**
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka
+
+security:
+  jwt:
+    # Replace with secure externalized secret for non-dev use.
+    secret: ThisIsADevelopmentOnlySecretKeyForJwtSigning12345
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
