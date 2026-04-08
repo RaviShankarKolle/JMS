@@ -1,0 +1,439 @@
+package com.library.users;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+@SpringBootApplication
+public class UserServiceApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(UserServiceApplication.class, args);
+    }
+}
+com.library.users.common.ApiResponse
+package com.library.users.common;
+import java.time.Instant;
+import java.util.Map;
+public record ApiResponse<T>(
+        String status,
+        T data,
+        ErrorBody error,
+        Map<String, Object> metadata,
+        Instant timestamp
+) {
+    public static <T> ApiResponse<T> success(T data, Map<String, Object> metadata) {
+        return new ApiResponse<>("SUCCESS", data, null, metadata, Instant.now());
+    }
+    public static ApiResponse<Void> error(String code, String message, Map<String, Object> metadata) {
+        return new ApiResponse<>("ERROR", null, new ErrorBody(code, message), metadata, Instant.now());
+    }
+    public record ErrorBody(String code, String message) {}
+}
+com.library.users.exception.ApplicationException
+package com.library.users.exception;
+import org.springframework.http.HttpStatus;
+public class ApplicationException extends RuntimeException {
+    private final String code;
+    private final HttpStatus status;
+    public ApplicationException(String code, String message, HttpStatus status) {
+        super(message);
+        this.code = code;
+        this.status = status;
+    }
+    public String getCode() {
+        return code;
+    }
+    public HttpStatus getStatus() {
+        return status;
+    }
+}
+com.library.users.exception.GlobalExceptionHandler
+package com.library.users.exception;
+import com.library.users.common.ApiResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.validation.FieldError;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import java.util.HashMap;
+import java.util.Map;
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ApiResponse<Void>> handleValidation(MethodArgumentNotValidException ex) {
+        Map<String, Object> metadata = new HashMap<>();
+        Map<String, String> fieldErrors = new HashMap<>();
+        for (FieldError fieldError : ex.getBindingResult().getFieldErrors()) {
+            fieldErrors.put(fieldError.getField(), fieldError.getDefaultMessage());
+        }
+        metadata.put("validationErrors", fieldErrors);
+        return ResponseEntity.badRequest().body(ApiResponse.error("VALIDATION_ERROR", "Invalid request body.", metadata));
+    }
+    @ExceptionHandler(ApplicationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleApp(ApplicationException ex) {
+        return ResponseEntity.status(ex.getStatus())
+                .body(ApiResponse.error(ex.getCode(), ex.getMessage(), Map.of()));
+    }
+    @ExceptionHandler(DataAccessException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDataAccess(DataAccessException ex) {
+        log.error("Database error", ex);
+        String detail = ex.getMostSpecificCause() != null ? ex.getMostSpecificCause().getMessage() : ex.getMessage();
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("detail", detail == null ? "No additional detail." : detail);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiResponse.error(
+                        "DATABASE_ERROR",
+                        "Database operation failed. Check MySQL is running, credentials in application.yml, and schema applied.",
+                        metadata));
+    }
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDataIntegrity(DataIntegrityViolationException ex) {
+        String detail = ex.getMostSpecificCause() != null ? ex.getMostSpecificCause().getMessage() : ex.getMessage();
+        if (detail != null && detail.toLowerCase().contains("uk_users_email")) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(ApiResponse.error("USER_EXISTS", "Email is already registered.", Map.of()));
+        }
+        return handleDataAccess(ex);
+    }
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnknown(Exception ex) {
+        log.error("Unexpected error", ex);
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("detail", ex.getMessage() == null ? "No additional detail." : ex.getMessage());
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiResponse.error(
+                        "INTERNAL_ERROR",
+                        "Unexpected server error.",
+                        metadata));
+    }
+}
+com.library.users.config.OpenApiConfig
+package com.library.users.config;
+import io.swagger.v3.oas.models.OpenAPI;
+import io.swagger.v3.oas.models.info.Info;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+@Configuration
+public class OpenApiConfig {
+    @Bean
+    public OpenAPI userServiceOpenApi() {
+        return new OpenAPI()
+                .info(new Info()
+                        .title("User Service API")
+                        .description("Demo: no JWT. Use header X-User-Id for profile and admin checks after login.")
+                        .version("v1"));
+    }
+}
+com.library.users.security.SecurityConfig
+package com.library.users.security;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+/**
+ * User-service demo: no JWT, no login filter. All endpoints open; identity for profile is {@code X-User-Id}.
+ */
+@Configuration
+public class SecurityConfig {
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http.csrf(csrf -> csrf.disable())
+                .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
+        return http.build();
+    }
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+}
+com.library.users.user.UserDtos
+package com.library.users.user;
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
+import org.springframework.lang.Nullable;
+import java.util.Set;
+public class UserDtos {
+    public record RegisterRequest(
+            @NotBlank @Size(max = 120) String name,
+            @NotBlank @Email String email,
+            @NotBlank @Size(min = 8, max = 64) String password,
+            @Nullable @Pattern(regexp = "^[0-9+\\-() ]{7,30}$", message = "Invalid phone format") String phone,
+            String role
+    ) {}
+    public record LoginRequest(
+            @NotBlank @Email String email,
+            @NotBlank String password
+    ) {}
+    public record UpdateProfileRequest(
+            @NotBlank @Size(max = 120) String name,
+            @Pattern(regexp = "^[0-9+\\-() ]{7,30}$", message = "Invalid phone format") String phone
+    ) {}
+    /** Returned after successful registration. */
+    public record RegisterResponse(Long userId, String name, String email, String role) {}
+    /**
+     * Returned after successful login (no JWT — client passes {@code X-User-Id} for profile APIs).
+     */
+    public record LoginResponse(String message, Long userId, Set<String> roles) {}
+    public record UserProfileResponse(Long id, String name, String email, String phone, String status, Set<String> roles) {}
+}
+com.library.users.user.UserRepository
+package com.library.users.user;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.support.GeneratedKeyHolder;
+import org.springframework.jdbc.support.KeyHolder;
+import org.springframework.stereotype.Repository;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
+@Repository
+public class UserRepository {
+    private final NamedParameterJdbcTemplate jdbcTemplate;
+    public UserRepository(NamedParameterJdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+    }
+    public Optional<UserRecord> findByEmail(String email) {
+        String sql = "SELECT id, name, email, phone, password_hash, status FROM users WHERE email = :email";
+        List<UserRecord> rows = jdbcTemplate.query(sql, new MapSqlParameterSource("email", email), new UserRowMapper());
+        return rows.stream().findFirst();
+    }
+    public Optional<UserRecord> findById(Long id) {
+        String sql = "SELECT id, name, email, phone, password_hash, status FROM users WHERE id = :id";
+        List<UserRecord> rows = jdbcTemplate.query(sql, new MapSqlParameterSource("id", id), new UserRowMapper());
+        return rows.stream().findFirst();
+    }
+    public Long createUser(String name, String email, String phone, String passwordHash) {
+        String sql = "INSERT INTO users(name, email, phone, password_hash, status) VALUES(:name, :email, :phone, :passwordHash, 'ACTIVE')";
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("name", name)
+                .addValue("email", email)
+                .addValue("phone", phone)
+                .addValue("passwordHash", passwordHash);
+        KeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbcTemplate.update(sql, params, keyHolder, new String[]{"id"});
+        Number key = keyHolder.getKey();
+        if (key == null) {
+            throw new IllegalStateException("INSERT into users did not return generated id");
+        }
+        return key.longValue();
+    }
+    public void updateProfile(Long userId, String name, String phone) {
+        String sql = "UPDATE users SET name = :name, phone = :phone WHERE id = :id";
+        jdbcTemplate.update(sql, new MapSqlParameterSource()
+                .addValue("name", name)
+                .addValue("phone", phone)
+                .addValue("id", userId));
+    }
+    public Set<String> getRoles(Long userId) {
+        String sql = """
+                SELECT r.role_name
+                FROM user_roles ur
+                JOIN roles r ON ur.role_id = r.id
+                WHERE ur.user_id = :userId
+                """;
+        List<String> roles = jdbcTemplate.queryForList(sql, new MapSqlParameterSource("userId", userId), String.class);
+        return roles.stream().collect(Collectors.toSet());
+    }
+    public void assignRole(Long userId, String roleName) {
+        String sql = """
+                INSERT INTO user_roles(user_id, role_id)
+                SELECT :userId, id FROM roles WHERE role_name = :roleName
+                """;
+        int updated = jdbcTemplate.update(sql, new MapSqlParameterSource()
+                .addValue("userId", userId)
+                .addValue("roleName", roleName));
+        if (updated == 0) {
+            throw new IllegalStateException("Unknown role: " + roleName);
+        }
+    }
+    public record UserRecord(Long id, String name, String email, String phone, String passwordHash, String status) {}
+    private static class UserRowMapper implements RowMapper<UserRecord> {
+        @Override
+        public UserRecord mapRow(ResultSet rs, int rowNum) throws SQLException {
+            return new UserRecord(
+                    rs.getLong("id"),
+                    rs.getString("name"),
+                    rs.getString("email"),
+                    rs.getString("phone"),
+                    rs.getString("password_hash"),
+                    rs.getString("status")
+            );
+        }
+    }
+}
+com.library.users.user.AuthService
+package com.library.users.user;
+import com.library.users.exception.ApplicationException;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import java.util.Set;
+import static com.library.users.user.UserDtos.*;
+@Service
+public class AuthService {
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    public AuthService(UserRepository userRepository, PasswordEncoder passwordEncoder) {
+        this.userRepository = userRepository;
+        this.passwordEncoder = passwordEncoder;
+    }
+    @Transactional
+    public RegisterResponse register(RegisterRequest request) {
+        String email = normalizeEmail(request.email());
+        userRepository.findByEmail(email).ifPresent(existing -> {
+            throw new ApplicationException("USER_EXISTS", "Email is already registered.", HttpStatus.CONFLICT);
+        });
+        String role = request.role() == null || request.role().isBlank() ? "USER" : request.role().trim().toUpperCase();
+        Long userId = userRepository.createUser(
+                request.name(),
+                email,
+                request.phone(),
+                passwordEncoder.encode(request.password())
+        );
+        userRepository.assignRole(userId, role);
+        return new RegisterResponse(userId, request.name(), email, role);
+    }
+    public LoginResponse login(LoginRequest request) {
+        String email = normalizeEmail(request.email());
+        UserRepository.UserRecord user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ApplicationException("INVALID_CREDENTIALS", "Invalid credentials.", HttpStatus.UNAUTHORIZED));
+        if (!passwordEncoder.matches(request.password(), user.passwordHash())) {
+            throw new ApplicationException("INVALID_CREDENTIALS", "Invalid credentials.", HttpStatus.UNAUTHORIZED);
+        }
+        Set<String> roles = userRepository.getRoles(user.id());
+        return new LoginResponse("Login successful.", user.id(), roles);
+    }
+    private static String normalizeEmail(String email) {
+        return email == null ? null : email.trim().toLowerCase();
+    }
+}
+com.library.users.user.AuthController
+package com.library.users.user;
+import com.library.users.common.ApiResponse;
+import jakarta.validation.Valid;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import java.util.Map;
+import static com.library.users.user.UserDtos.*;
+@RestController
+@RequestMapping("/api/v1/auth")
+public class AuthController {
+    private final AuthService authService;
+    public AuthController(AuthService authService) {
+        this.authService = authService;
+    }
+    @PostMapping("/register")
+    public ResponseEntity<ApiResponse<RegisterResponse>> register(@Valid @RequestBody RegisterRequest request) {
+        RegisterResponse body = authService.register(request);
+        return ResponseEntity.ok(ApiResponse.success(body, Map.of("message", "Registration successful.")));
+    }
+    @PostMapping("/login")
+    public ResponseEntity<ApiResponse<LoginResponse>> login(@Valid @RequestBody LoginRequest request) {
+        LoginResponse body = authService.login(request);
+        return ResponseEntity.ok(ApiResponse.success(body, Map.of()));
+    }
+}
+com.library.users.user.UserProfileService
+
+package com.library.users.user;
+import com.library.users.exception.ApplicationException;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import java.util.Set;
+import static com.library.users.user.UserDtos.*;
+@Service
+public class UserProfileService {
+    private final UserRepository userRepository;
+    public UserProfileService(UserRepository userRepository) {
+        this.userRepository = userRepository;
+    }
+    public UserProfileResponse getCurrentUserProfile(Long userId) {
+        UserRepository.UserRecord user = userRepository.findById(userId)
+                .orElseThrow(() -> new ApplicationException("USER_NOT_FOUND", "User not found.", HttpStatus.NOT_FOUND));
+        Set<String> roles = userRepository.getRoles(user.id());
+        return new UserProfileResponse(user.id(), user.name(), user.email(), user.phone(), user.status(), roles);
+    }
+    @Transactional
+    public UserProfileResponse updateCurrentUserProfile(Long userId, UpdateProfileRequest request) {
+        userRepository.updateProfile(userId, request.name(), request.phone());
+        return getCurrentUserProfile(userId);
+    }
+    public void requireAdminRole(Long userId) {
+        Set<String> roles = userRepository.getRoles(userId);
+        if (!roles.contains("ADMIN")) {
+            throw new ApplicationException("FORBIDDEN", "Admin role required.", HttpStatus.FORBIDDEN);
+        }
+    }
+}
+com.library.users.user.UserController
+package com.library.users.user;
+import com.library.users.common.ApiResponse;
+import com.library.users.exception.ApplicationException;
+import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import java.util.Map;
+import static com.library.users.user.UserDtos.*;
+@RestController
+@RequestMapping("/api/v1/users")
+public class UserController {
+    private static final String USER_ID_HEADER = "X-User-Id";
+    private final UserProfileService userProfileService;
+    public UserController(UserProfileService userProfileService) {
+        this.userProfileService = userProfileService;
+    }
+    @GetMapping("/profile")
+    public ResponseEntity<ApiResponse<UserProfileResponse>> getCurrentUserProfile(
+            @RequestHeader(USER_ID_HEADER) String userIdHeader) {
+        Long userId = parseUserId(userIdHeader);
+        return ResponseEntity.ok(ApiResponse.success(userProfileService.getCurrentUserProfile(userId), Map.of()));
+    }
+    @PutMapping("/profile")
+    public ResponseEntity<ApiResponse<UserProfileResponse>> updateCurrentUserProfile(
+            @RequestHeader(USER_ID_HEADER) String userIdHeader,
+            @Valid @RequestBody UpdateProfileRequest request) {
+        Long userId = parseUserId(userIdHeader);
+        UserProfileResponse body = userProfileService.updateCurrentUserProfile(userId, request);
+        return ResponseEntity.ok(ApiResponse.success(body, Map.of("message", "Profile updated.")));
+    }
+    @GetMapping("/admin/ping")
+    public ResponseEntity<ApiResponse<String>> adminPing(@RequestHeader(USER_ID_HEADER) String userIdHeader) {
+        Long userId = parseUserId(userIdHeader);
+        userProfileService.requireAdminRole(userId);
+        return ResponseEntity.ok(ApiResponse.success("admin-ok", Map.of()));
+    }
+    private static Long parseUserId(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw new ApplicationException("MISSING_USER_CONTEXT", "Header " + USER_ID_HEADER + " is required.", HttpStatus.BAD_REQUEST);
+        }
+        try {
+            return Long.parseLong(raw.trim());
+        } catch (NumberFormatException ex) {
+            throw new ApplicationException("INVALID_USER_CONTEXT", "Header " + USER_ID_HEADER + " must be a numeric user id.", HttpStatus.BAD_REQUEST);
+        }
+    }
+}
