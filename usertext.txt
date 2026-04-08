@@ -437,3 +437,31 @@ public class UserController {
         }
     }
 }
+
+
+
+### Work Done Today
+- Built/verified `user-service` module with layered architecture:
+  - Controller -> Service -> Repository
+- Implemented MySQL DDL-first schema (`V1__user_service_schema.sql`) for:
+  - `users`
+  - `roles`
+  - `user_roles`
+- Added seed master data:
+  - `USER`, `LIBRARIAN`, `ADMIN`
+- Implemented JDBC repository methods using `NamedParameterJdbcTemplate`:
+  - create user
+  - find user by id/email
+  - assign/get roles
+  - update profile
+- Implemented Auth APIs:
+  - `POST /api/v1/auth/register`
+  - `POST /api/v1/auth/login`
+- Implemented Profile APIs (no JWT mode):
+  - `GET /api/v1/users/profile` (via `X-User-Id`)
+  - `PUT /api/v1/users/profile` (via `X-User-Id`)
+  - `GET /api/v1/users/admin/ping` (role check)
+- Added centralized response model (`ApiResponse`) and global exception handling.
+- Added Swagger/OpenAPI config for local API verification.
+- Completed Postman verification for register/login/profile flows.
+
