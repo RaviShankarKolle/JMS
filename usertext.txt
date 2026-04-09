@@ -439,29 +439,293 @@ public class UserController {
 }
 
 
+  private final NamedParameterJdbcTemplate jdbcTemplate;
+    public UserRepository(NamedParameterJdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+    }
+    public Optional<UserRecord> findByEmail(String email) {
+        String sql = "SELECT id, name, email, phone, password_hash, status FROM users WHERE email = :email";
+        List<UserRecord> rows = jdbcTemplate.query(sql, new MapSqlParameterSource("email", email), new UserRowMapper());
+        return rows.stream().findFirst();
+    }
+    public Optional<UserRecord> findById(Long id) {
+        String sql = "SELECT id, name, email, phone, password_hash, status FROM users WHERE id = :id";
+        List<UserRecord> rows = jdbcTemplate.query(sql, new MapSqlParameterSource("id", id), new UserRowMapper());
+        return rows.stream().findFirst();
+    }
+    public Long createUser(String name, String email, String phone, String passwordHash) {
+        String sql = "INSERT INTO users(name, email, phone, password_hash, status) VALUES(:name, :email, :phone, :passwordHash, 'ACTIVE')";
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("name", name)
+                .addValue("email", email)
+                .addValue("phone", phone)
+                .addValue("passwordHash", passwordHash);
+        jdbcTemplate.update(sql, params);
+        return findByEmail(email).map(UserRecord::id).orElseThrow();
+    }
+    public void updateProfile(Long userId, String name, String phone) {
+        String sql = "UPDATE users SET name = :name, phone = :phone WHERE id = :id";
+        jdbcTemplate.update(sql, new MapSqlParameterSource()
+                .addValue("name", name)
+                .addValue("phone", phone)
+                .addValue("id", userId));
+    }
+    public Set<String> getRoles(Long userId) {
+        String sql = """
+                SELECT r.role_name
+                FROM user_roles ur
+                JOIN roles r ON ur.role_id = r.id
+                WHERE ur.user_id = :userId
+                """;
+        List<String> roles = jdbcTemplate.queryForList(sql, new MapSqlParameterSource("userId", userId), String.class);
+        return roles.stream().collect(Collectors.toSet());
+    }
+    public void assignRole(Long userId, String roleName) {
+        String sql = """
+                INSERT INTO user_roles(user_id, role_id)
+                SELECT :userId, id FROM roles WHERE role_name = :roleName
+                """;
+        jdbcTemplate.update(sql, new MapSqlParameterSource().addValue("userId", userId).addValue("roleName", roleName));
+    }
+    public void insertPasswordResetToken(Long userId, String token, Instant expiry) {
+        String sql = "INSERT INTO password_reset_tokens(user_id, token, expiry, used) VALUES(:userId, :token, :expiry, false)";
+        jdbcTemplate.update(sql, new MapSqlParameterSource()
+                .addValue("userId", userId)
+                .addValue("token", token)
+                .addValue("expiry", expiry));
+    }
+    public Optional<Long> findValidTokenUser(String token) {
+        if (token == null || token.isBlank()) {
+            return Optional.empty();
+        }
+        String trimmed = token.trim();
+        String sql = """
+                SELECT user_id, used, expiry FROM password_reset_tokens
+                WHERE token = :token
+                ORDER BY id DESC LIMIT 1
+                """;
+        return jdbcTemplate.query(sql, new MapSqlParameterSource("token", trimmed), rs -> {
+            if (!rs.next()) {
+                return Optional.empty();
+            }
+            if (rs.getInt("used") != 0) {
+                return Optional.empty();
+            }
+            Timestamp expiryTs = rs.getTimestamp("expiry");
+            if (expiryTs == null) {
+                return Optional.empty();
+            }
+            Instant expiry = expiryTs.toInstant();
+            if (!expiry.isAfter(Instant.now())) {
+                return Optional.empty();
+            }
+            return Optional.of(rs.getLong("user_id"));
+        });
+    }
+    public void markTokenUsed(String token) {
+        if (token == null || token.isBlank()) {
+            return;
+        }
+        String sql = "UPDATE password_reset_tokens SET used = true WHERE token = :token";
+        jdbcTemplate.update(sql, new MapSqlParameterSource("token", token.trim()));
+    }
+    public void updatePassword(Long userId, String passwordHash) {
+        String sql = "UPDATE users SET password_hash = :passwordHash WHERE id = :id";
+        jdbcTemplate.update(sql, new MapSqlParameterSource()
+                .addValue("passwordHash", passwordHash)
+                .addValue("id", userId));
+    }
+    public void auditLog(Long userId, String action, String ip, String userAgent) {
+        String sql = "INSERT INTO audit_logs(user_id, action_name, ip, user_agent) VALUES(:userId, :action, :ip, :userAgent)";
+        jdbcTemplate.update(sql, new MapSqlParameterSource()
+                .addValue("userId", userId)
+                .addValue("action", action)
+                .addValue("ip", ip)
+                .addValue("userAgent", userAgent));
+    }
+    public record UserRecord(Long id, String name, String email, String phone, String passwordHash, String status) {}
+    private static class UserRowMapper implements RowMapper<UserRecord> {
+        @Override
+        public UserRecord mapRow(ResultSet rs, int rowNum) throws SQLException {
+            return new UserRecord(
+                    rs.getLong("id"),
+                    rs.getString("name"),
+                    rs.getString("email"),
+                    rs.getString("phone"),
+                    rs.getString("password_hash"),
+                    rs.getString("status")
+            );
+        }
+    }
+}
 
-### Work Done Today
-- Built/verified `user-service` module with layered architecture:
-  - Controller -> Service -> Repository
-- Implemented MySQL DDL-first schema (`V1__user_service_schema.sql`) for:
-  - `users`
-  - `roles`
-  - `user_roles`
-- Added seed master data:
-  - `USER`, `LIBRARIAN`, `ADMIN`
-- Implemented JDBC repository methods using `NamedParameterJdbcTemplate`:
-  - create user
-  - find user by id/email
-  - assign/get roles
-  - update profile
-- Implemented Auth APIs:
-  - `POST /api/v1/auth/register`
-  - `POST /api/v1/auth/login`
-- Implemented Profile APIs (no JWT mode):
-  - `GET /api/v1/users/profile` (via `X-User-Id`)
-  - `PUT /api/v1/users/profile` (via `X-User-Id`)
-  - `GET /api/v1/users/admin/ping` (role check)
-- Added centralized response model (`ApiResponse`) and global exception handling.
-- Added Swagger/OpenAPI config for local API verification.
-- Completed Postman verification for register/login/profile flows.
 
+
+@Service
+public class AuthService {
+    private static final Logger log = LoggerFactory.getLogger(AuthService.class);
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final TokenService tokenService;
+    private final NotificationClient notificationClient;
+    public AuthService(UserRepository userRepository,
+                       PasswordEncoder passwordEncoder,
+                       TokenService tokenService,
+                       NotificationClient notificationClient) {
+        this.userRepository = userRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.tokenService = tokenService;
+        this.notificationClient = notificationClient;
+    }
+    @Transactional
+    public void register(RegisterRequest request, String ip, String userAgent) {
+        userRepository.findByEmail(request.email()).ifPresent(existing -> {
+            throw new ApplicationException("USER_EXISTS", "Email is already registered.", HttpStatus.CONFLICT);
+        });
+        String role = request.role() == null || request.role().isBlank() ? "USER" : request.role().toUpperCase();
+        Long userId = userRepository.createUser(
+                request.name(),
+                request.email().toLowerCase(),
+                request.phone(),
+                passwordEncoder.encode(request.password())
+        );
+        userRepository.assignRole(userId, role);
+        userRepository.auditLog(userId, "REGISTER", ip, userAgent);
+        try {
+            notificationClient.sendRegistrationNotification(
+                    new com.library.users.notification.RegistrationNotificationRequest(
+                            request.name(),
+                            request.email().toLowerCase()
+                    )
+            );
+        } catch (FeignException ex) {
+            log.warn("Registration notification failed for {}: {}", request.email(), ex.getMessage());
+        }
+    }
+    public AuthResponse login(LoginRequest request, String ip, String userAgent) {
+        UserRepository.UserRecord user = userRepository.findByEmail(request.email().toLowerCase())
+                .orElseThrow(() -> new ApplicationException("INVALID_CREDENTIALS", "Invalid credentials.", HttpStatus.UNAUTHORIZED));
+        if (!passwordEncoder.matches(request.password(), user.passwordHash())) {
+            throw new ApplicationException("INVALID_CREDENTIALS", "Invalid credentials.", HttpStatus.UNAUTHORIZED);
+        }
+        Set<String> roles = userRepository.getRoles(user.id());
+        String token = tokenService.generateToken(user.id(), roles);
+        userRepository.auditLog(user.id(), "LOGIN", ip, userAgent);
+        return new AuthResponse(token, "Bearer", tokenService.getExpirationSeconds());
+    }
+    public void forgotPassword(ForgotPasswordRequest request, String ip, String userAgent) {
+        userRepository.findByEmail(request.email().toLowerCase()).ifPresent(user -> {
+            String token = UUID.randomUUID().toString();
+            userRepository.insertPasswordResetToken(user.id(), token, Instant.now().plus(30, ChronoUnit.MINUTES));
+            userRepository.auditLog(user.id(), "FORGOT_PASSWORD", ip, userAgent);
+            try {
+                notificationClient.sendPasswordResetNotification(
+                        new com.library.users.notification.PasswordResetNotificationRequest(
+                                user.email(),
+                                user.name(),
+                                token
+                        )
+                );
+            } catch (FeignException ex) {
+                log.warn("Password reset notification failed for {}: {}", user.email(), ex.getMessage());
+            }
+        });
+    }
+    @Transactional
+    public void resetPassword(ResetPasswordRequest request, String ip, String userAgent) {
+        String resetToken = request.token().trim();
+        Long userId = userRepository.findValidTokenUser(resetToken)
+                .orElseThrow(() -> new ApplicationException("INVALID_RESET_TOKEN", "Reset token is invalid or expired.", HttpStatus.BAD_REQUEST));
+        userRepository.updatePassword(userId, passwordEncoder.encode(request.newPassword()));
+        userRepository.markTokenUsed(resetToken);
+        userRepository.auditLog(userId, "RESET_PASSWORD", ip, userAgent);
+    }
+}
+
+
+
+@FeignClient(name = "notification-service")
+public interface NotificationClient {
+    @PostMapping("/api/v1/notifications/registration")
+    void sendRegistrationNotification(@RequestBody RegistrationNotificationRequest request);
+    @PostMapping("/api/v1/notifications/password-reset")
+    void sendPasswordResetNotification(@RequestBody PasswordResetNotificationRequest request);
+}
+
+package com.library.users.notification;
+public record PasswordResetNotificationRequest(
+        String email,
+        String name,
+        String resetToken
+) {}
+
+
+mport jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+public record PasswordResetNotificationRequest(
+        @NotBlank @Email String email,
+        @NotBlank String name,
+        @NotBlank String resetToken
+) {}
+
+
+private static final Logger log = LoggerFactory.getLogger(EmailNotificationService.class);
+    private final JavaMailSender mailSender;
+    public EmailNotificationService(JavaMailSender mailSender) {
+        this.mailSender = mailSender;
+    }
+    public void sendRegistrationEmail(RegistrationNotificationRequest request) {
+        try {
+            SimpleMailMessage message = new SimpleMailMessage();
+            message.setTo(request.email());
+            message.setSubject("Welcome to Library Management");
+            message.setText("Hi " + request.name() + ",\n\nYour account has been created successfully.");
+            mailSender.send(message);
+        } catch (Exception ex) {
+            log.warn("Unable to send registration email to {}: {}", request.email(), ex.getMessage());
+        }
+    }
+    public void sendPasswordResetEmail(PasswordResetNotificationRequest request) {
+        try {
+            SimpleMailMessage message = new SimpleMailMessage();
+            message.setTo(request.email());
+            message.setSubject("Reset your Library Management password");
+            message.setText("Hi " + request.name() + ",\n\n"
+                    + "Use this token in the reset-password API (within 30 minutes):\n\n"
+                    + request.resetToken() + "\n\n"
+                    + "If you did not request this, you can ignore this email.");
+            mailSender.send(message);
+        } catch (Exception ex) {
+            log.warn("Unable to send password reset email to {}: {}", request.email(), ex.getMessage());
+        }
+    }
+}
+notification-service/src/main/java/com/library/notification/controller/NotificationController.java
+package com.library.notification.controller;
+import com.library.notification.dto.PasswordResetNotificationRequest;
+import com.library.notification.dto.RegistrationNotificationRequest;
+import com.library.notification.service.EmailNotificationService;
+import jakarta.validation.Valid;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+@RestController
+@RequestMapping("/api/v1/notifications")
+public class NotificationController {
+    private final EmailNotificationService emailNotificationService;
+    public NotificationController(EmailNotificationService emailNotificationService) {
+        this.emailNotificationService = emailNotificationService;
+    }
+    @PostMapping("/registration")
+    public ResponseEntity<Void> sendRegistrationNotification(@Valid @RequestBody RegistrationNotificationRequest request) {
+        emailNotificationService.sendRegistrationEmail(request);
+        return ResponseEntity.accepted().build();
+    }
+    @PostMapping("/password-reset")
+    public ResponseEntity<Void> sendPasswordResetNotification(@Valid @RequestBody PasswordResetNotificationRequest request) {
+        emailNotificationService.sendPasswordResetEmail(request);
+        return ResponseEntity.accepted().build();
+    }
+}
