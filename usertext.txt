@@ -1,73 +1,105 @@
-Today's Progress
-
-1. Authentication Flow (user-service)
-- Implemented complete authentication flow:
-  - User registration
-  - User login
-  - Forgot password
-  - Reset password
-
-2. JWT-Based Security
-- Implemented JWT authentication:
-  - Token generation with user ID and roles
-  - Token validation in user-service filter
-  - Route protection using global JWT filter in API Gateway
-
-3. Endpoint Access Control
-- Configured public vs protected endpoints:
-
-Public Endpoints:
-- Register
-- Login
-- Forgot password
-- Reset password
-- Health / Docs
-
-Protected Endpoints:
-- User profile APIs
-- Admin APIs
-
-4. Role-Based Access Control
-- Implemented role-based authorization:
-  - Admin routes protected using hasRole('ADMIN')
-
-5. Password Reset Token Lifecycle
-- Implemented secure token handling:
-  - Token generation using UUID
-  - 30-minute expiration
-  - One-time usage (used = true after reset)
-  - Input trimming and validation checks
-  - Improved reliability in token verification
-
-6. Notification Service Integration
-- Integrated notification-service with user-service:
-  - Communication via Feign Client + Eureka
-
-Triggered Notifications:
-- Registration success email
-- Password reset token email
-
-7. Notification Service APIs
-- Added endpoints:
-  - POST /api/v1/notifications/registration
-  - POST /api/v1/notifications/password-reset
-
-8. Email Configuration
-- Configured SMTP using JavaMailSender for email delivery
+- id: book-service-route
+  uri: lb://book-service
+  predicates:
+    - Path=/api/v1/books/**
+- id: borrow-service-route
+  uri: lb://borrow-service
+  predicates:
+    - Path=/api/v1/borrows/**
 
 
-Captured Data:
-- User ID
-- Action
-- IP address
-- User agent
-- Timestamp
+"/api/v1/internal/**",
 
-10. End-to-End Testing
-- Verified complete flow via Postman through API Gateway:
-  - Register → Login → Profile → Forgot Password → Reset Password
 
-11. Bug Fixes
-- Fixed token validation issues:
-  - Resolved INVALID_RESET_TOKEN errors
-  - Improved validation robustness
+public record UserEligibilityResponse(Long userId, boolean eligible, String reason) {}
+
+
+public UserEligibilityResponse getUserEligibility(Long userId) {
+    UserRepository.UserRecord user = userRepository.findById(userId)
+            .orElseThrow(() -> new ApplicationException("USER_NOT_FOUND", "User not found.", HttpStatus.NOT_FOUND));
+    boolean eligible = "ACTIVE".equalsIgnoreCase(user.status());
+    String reason = eligible ? "USER_ACTIVE" : "USER_NOT_ACTIVE";
+    return new UserEligibilityResponse(user.id(), eligible, reason);
+}
+
+
+package com.library.users.user;
+
+import com.library.users.common.ApiResponse;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
+
+import static com.library.users.user.UserDtos.UserEligibilityResponse;
+
+@RestController
+@RequestMapping("/api/v1/internal/users")
+public class InternalUserController {
+
+    private final UserProfileService userProfileService;
+
+    public InternalUserController(UserProfileService userProfileService) {
+        this.userProfileService = userProfileService;
+    }
+
+    @GetMapping("/{userId}/eligibility")
+    public ResponseEntity<ApiResponse<UserEligibilityResponse>> getEligibility(@PathVariable Long userId) {
+        return ResponseEntity.ok(ApiResponse.success(userProfileService.getUserEligibility(userId), Map.of()));
+    }
+}
+
+
+package com.library.notification.dto;
+
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+
+import java.time.LocalDate;
+
+public record OverdueNotificationRequest(
+        @NotBlank @Email String email,
+        @NotBlank String name,
+        @NotNull Long bookId,
+        @NotNull Long borrowId,
+        @NotNull LocalDate dueDate
+) {}
+
+
+
+
+
+
+
+
+
+
+
+
+public void sendOverdueEmail(OverdueNotificationRequest request) {
+    try {
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setTo(request.email());
+        message.setSubject("Overdue book alert - Library Management");
+        message.setText("Hi " + request.name() + ",\n\n"
+                + "Your borrowed book is overdue.\n"
+                + "Borrow ID: " + request.borrowId() + "\n"
+                + "Book ID: " + request.bookId() + "\n"
+                + "Due Date: " + request.dueDate() + "\n\n"
+                + "Please return the book as soon as possible.");
+        mailSender.send(message);
+    } catch (Exception ex) {
+        log.warn("Unable to send overdue email to {}: {}", request.email(), ex.getMessage());
+    }
+}
+
+
+
+
+
+@PostMapping("/overdue")
+public ResponseEntity<Void> sendOverdueNotification(@Valid @RequestBody OverdueNotificationRequest request) {
+    emailNotificationService.sendOverdueEmail(request);
+    return ResponseEntity.accepted().build();
+}
