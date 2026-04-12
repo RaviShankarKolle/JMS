@@ -39,25 +39,32 @@ Create, update, and delete require LIBRARIAN or ADMIN.
 JSON responses for 401 (missing/invalid JWT) and 403 (insufficient role).
 
 
-  private void publishBorrowEvent(String type, Long borrowId, Long userId, Long bookId, LocalDate dueDate) {
-        eventPublisher.publishEvent(new BorrowDomainEvent(type, borrowId, userId, bookId, Instant.now()));
-        log.info("Borrow event: type={}, borrowId={}, userId={}, bookId={}", type, borrowId, userId, bookId);
-        if ("BORROW_ALLOCATED".equals(type) && dueDate != null) {
-            try {
-                UserClient.UserProfileSummary profile = fetchUserProfileOrNull(userId);
-                if (profile == null || profile.email() == null || profile.email().isBlank()) {
-                    log.warn("Skipping borrow confirmation for borrowId {}: no email for userId {}", borrowId, userId);
-                    return;
-                }
-                String displayName = profile.name() != null && !profile.name().isBlank() ? profile.name() : "Library user";
-                notificationClient.sendBorrowConfirmation(new NotificationClient.BorrowConfirmationRequest(
-                        profile.email(),
-                        displayName,
-                        borrowId,
-                        bookId,
-                        dueDate
-                ));
-            } catch (Exception ex) {
-                log.warn("Failed to send borrow confirmation for borrowId {}: {}", borrowId, ex.getMessage());
-            }
+
+ public UserNotificationContactResponse getNotificationContact(Long userId) {
+        UserRepository.UserRecord user = userRepository.findById(userId)
+                .orElseThrow(() -> new ApplicationException("USER_NOT_FOUND", "User not found.", HttpStatus.NOT_FOUND));
+        return new UserNotificationContactResponse(user.email(), user.name());
+    }
+
+
+    @GetMapping("/{userId}/profile-summary")
+    public ResponseEntity<ApiResponse<UserNotificationContactResponse>> getProfileSummary(@PathVariable Long userId) {
+        return ResponseEntity.ok(ApiResponse.success(userProfileService.getNotificationContact(userId), Map.of()));
+    }
+
+
+@FeignClient(name = "user-service")
+public interface UserClient {
+
+    @GetMapping("/api/v1/internal/users/{userId}/eligibility")
+    ApiResponse<UserEligibilityResponse> getEligibility(@PathVariable("userId") Long userId);
+
+    @GetMapping("/api/v1/internal/users/{userId}/profile-summary")
+    ApiResponse<UserNotificationContact> getProfileSummary(@PathVariable("userId") Long userId);
+
+    record UserEligibilityResponse(Long userId, boolean eligible, String reason) {}
+
+    /** Mirrors user-service {@code UserNotificationContactResponse} JSON for Feign decoding. */
+    record UserNotificationContact(String email, String name) {}
+}
 
