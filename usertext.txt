@@ -1,99 +1,32 @@
+Borrow Service Functionalities
+Create borrow record for a user and book with start/end dates.
+Validate borrow rules (for example: user eligibility/status and borrowing constraints).
+Retrieve borrow details/history (including user-specific history with pagination).
+Update borrow lifecycle states (active, returned, overdue handling).
+Trigger overdue processing through scheduled jobs.
+Integrate with notification service for borrow confirmation and reminder-related flows.
+Expose REST APIs through gateway route (/api/v1/borrows/**).
+Provide Swagger/OpenAPI docs (/swagger-ui.html, /v3/api-docs and gateway docs path).
+Include JUnit/Mockito unit tests for service/business logic and major scenarios.
 
-class UserProfileServiceTest {
 
-    private UserRepository userRepository;
-    private UserProfileService userProfileService;
-
-    @BeforeEach
-    void setUp() {
-        userRepository = mock(UserRepository.class);
-        userProfileService = new UserProfileService(userRepository);
-    }
-
-    @Test
-    void getCurrentUserProfile_shouldThrowWhenMissing() {
-        when(userRepository.findById(1L)).thenReturn(Optional.empty());
-
-        ApplicationException ex = assertThrows(ApplicationException.class, () -> userProfileService.getCurrentUserProfile(1L));
-
-        assertEquals("USER_NOT_FOUND", ex.getCode());
-    }
-
-    @Test
-    void getCurrentUserProfile_shouldReturnProfileWithRoles() {
-        when(userRepository.findById(1L)).thenReturn(Optional.of(user(1L, "ACTIVE")));
-        when(userRepository.getRoles(1L)).thenReturn(Set.of("USER"));
-
-        UserDtos.UserProfileResponse response = userProfileService.getCurrentUserProfile(1L);
-
-        assertEquals("Alice", response.name());
-        assertEquals(Set.of("USER"), response.roles());
-    }
-
-    @Test
-    void updateCurrentUserProfile_shouldAuditAndReload() {
-        when(userRepository.findById(1L)).thenReturn(Optional.of(user(1L, "ACTIVE")));
-        when(userRepository.getRoles(1L)).thenReturn(Set.of("USER"));
-
-        UserDtos.UpdateProfileRequest request = new UserDtos.UpdateProfileRequest("Alice", "9999999999");
-        UserDtos.UserProfileResponse response = userProfileService.updateCurrentUserProfile(1L, request, "127.0.0.1", "JUnit");
-
-        assertEquals("Alice", response.name());
-        verify(userRepository).updateProfile(1L, "Alice", "9999999999");
-        verify(userRepository).auditLog(1L, "UPDATE_PROFILE", "127.0.0.1", "JUnit");
-        verify(userRepository, times(1)).findById(1L);
-        verify(userRepository, times(1)).getRoles(1L);
-    }
-
-    @Test
-    void getUserEligibility_shouldReturnUserNotActive() {
-        when(userRepository.findById(2L)).thenReturn(Optional.of(user(2L, "INACTIVE")));
-
-        UserDtos.UserEligibilityResponse response = userProfileService.getUserEligibility(2L);
-
-        assertEquals(false, response.eligible());
-        assertEquals("USER_NOT_ACTIVE", response.reason());
-    }
-
-    @Test
-    void getUserEligibility_shouldReturnUserActive() {
-        when(userRepository.findById(2L)).thenReturn(Optional.of(user(2L, "ACTIVE")));
-
-        UserDtos.UserEligibilityResponse response = userProfileService.getUserEligibility(2L);
-
-        assertTrue(response.eligible());
-        assertEquals("USER_ACTIVE", response.reason());
-    }
-
-    @Test
-    void getUserEligibility_shouldThrowWhenMissing() {
-        when(userRepository.findById(99L)).thenReturn(Optional.empty());
-
-        ApplicationException ex = assertThrows(ApplicationException.class, () -> userProfileService.getUserEligibility(99L));
-
-        assertEquals("USER_NOT_FOUND", ex.getCode());
-    }
-
-    @Test
-    void getNotificationContact_shouldReturnMinimalProfile() {
-        when(userRepository.findById(3L)).thenReturn(Optional.of(user(3L, "ACTIVE")));
-
-        UserDtos.UserNotificationContactResponse response = userProfileService.getNotificationContact(3L);
-
-        assertEquals("alice@example.com", response.email());
-        assertEquals("Alice", response.name());
-    }
-
-    @Test
-    void getNotificationContact_shouldThrowWhenMissing() {
-        when(userRepository.findById(3L)).thenReturn(Optional.empty());
-
-        ApplicationException ex = assertThrows(ApplicationException.class, () -> userProfileService.getNotificationContact(3L));
-
-        assertEquals("USER_NOT_FOUND", ex.getCode());
-    }
-
-    private static UserRepository.UserRecord user(Long id, String status) {
-        return new UserRepository.UserRecord(id, "Alice", "alice@example.com", "9999999999", "hash", status);
-    }
-}
+Fine-Payment Service Functionalities
+Calculate and manage fines for overdue/lost-book scenarios.
+Create and track fine records per user/borrow context.
+Process fine payments and update fine status after payment.
+Provide endpoints for outstanding fines and payment history.
+Support scheduled/triggered reminder-related fine workflows.
+Integrate directly with notification service for fine reminder/payment update notifications.
+Expose REST APIs through gateway route (/api/v1/fines/**).
+Provide Swagger/OpenAPI docs (/swagger-ui.html, /v3/api-docs and gateway docs path).
+Include JUnit/Mockito unit tests for fine calculation and payment business flows.
+Notification Service Functionalities
+Send registration notifications.
+Send borrow confirmation and overdue notifications.
+Send fine reminder/payment-related notifications.
+Provide REST endpoints for notification requests from other services.
+Run scheduled reminder processing for pending notifications.
+SMTP-based email sending integration.
+Expose REST APIs through gateway route (/api/v1/notifications/**).
+Provide Swagger/OpenAPI docs (/swagger-ui.html, /v3/api-docs and gateway docs path).
+Include JUnit/Mockito unit tests for notification dispatch and scheduler scenarios.
