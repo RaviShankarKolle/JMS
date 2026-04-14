@@ -1,154 +1,99 @@
-Implemented functionality
-1Create book — POST /api/v1/books
-Stores title, author, genre, ISBN, total copies, and optional description. New books start as AVAILABLE with available_copies equal to total_copies.
-Validation: non-blank fields, ISBN pattern (10–17 digits/hyphens), at least one copy.
 
-Update book — PUT /api/v1/books/{bookId}
-Updates catalog metadata (same fields as create). Returns updated book payload.
+class UserProfileServiceTest {
 
-Soft remove book — DELETE /api/v1/books/{bookId}
-Marks the book as REMOVED (not physically deleted from the database).
+    private UserRepository userRepository;
+    private UserProfileService userProfileService;
 
-List books (paginated) — GET /api/v1/books?page=&size=
-Returns only books with status AVAILABLE, newest first. Page defaults to 0, size to 10; size is capped between 1 and 100. Response includes total count for pagination.
-
-Reserve a copy — POST /api/v1/books/{bookId}/reserve
-Decrements available_copies and updates status (AVAILABLE or RESERVED when no copies left). Fails with conflict if no copies are available or book is removed.
-
-Issue — POST /api/v1/books/{bookId}/issue
-Adjusts status for borrow workflow (AVAILABLE vs BORROWED depending on remaining copies). Intended for service-to-service use (e.g. borrow-service).
-
-Return — POST /api/v1/books/{bookId}/return
-Increments available_copies and sets status back to AVAILABLE.
-
-ISBN uniqueness — Creating a book with an ISBN that already exists returns a conflict-style business error.
-
-Domain events — On add, update, and remove, the service publishes internal BookCatalogEvent instances (BOOK_ADDED, BOOK_UPDATED, BOOK_REMOVED). BookEventListener handles these asynchronously and logs them (hook for future Kafka or other integrations).
-
-Consistent API envelope — Success and error responses use a shared ApiResponse shape (status, data, optional error body, metadata, timestamp).
-
-Global error handling — Application exceptions map to appropriate HTTP statuses via a central exception handler.
-
-Security
-JWT — Stateless API secured with a Bearer JWT filter; roles are read from the token.
-Rules (summary):
-Swagger/OpenAPI, Swagger UI, and GET /actuator/health are public.
-POST reserve/issue/return are permitted without JWT so other microservices (e.g. borrow-service via Feign) can call them without a user token.
-GET /api/v1/books (list) requires an authenticated user.
-Create, update, and delete require LIBRARIAN or ADMIN.
-JSON responses for 401 (missing/invalid JWT) and 403 (insufficient role).
-
-
-
-@Service
-public class FineService {
-
-    private static final Logger log = LoggerFactory.getLogger(FineService.class);
-
-    private static final BigDecimal DAILY_FINE = new BigDecimal("2.50");
-
-    private static final BigDecimal LOST_BOOK_FLAT_FINE = new BigDecimal("250.00");
-
-    private final FineRepository fineRepository;
-
-    private final BorrowClient borrowClient;
-
-    private final NotificationClient notificationClient;
-
-    private final UserClient userClient;
-
-    public FineService(FineRepository fineRepository,
-                       BorrowClient borrowClient,
-                       NotificationClient notificationClient,
-                       UserClient userClient) {
-        this.fineRepository = fineRepository;
-        this.borrowClient = borrowClient;
-        this.notificationClient = notificationClient;
-        this.userClient = userClient;
+    @BeforeEach
+    void setUp() {
+        userRepository = mock(UserRepository.class);
+        userProfileService = new UserProfileService(userRepository);
     }
 
-    @Transactional
-    public int recalculateOverdueFines() {
-        List<BorrowClient.OverdueBorrowRecord> overdueBorrows = borrowClient.getOverdueBorrows();
-        int updatedCount = 0;
-        for (BorrowClient.OverdueBorrowRecord record : overdueBorrows) {
-            long overdueDays = Math.max(1, ChronoUnit.DAYS.between(record.dueDate(), LocalDate.now()));
-            BigDecimal amount = DAILY_FINE.multiply(BigDecimal.valueOf(overdueDays)).setScale(2, RoundingMode.HALF_UP);
-            String reason = "Overdue fine: " + overdueDays + " day(s)";
-            upsertFine(record.borrowId(), record.userId(), record.bookId(), amount, reason, "PENDING");
-            updatedCount++;
-        }
-        return updatedCount;
+    @Test
+    void getCurrentUserProfile_shouldThrowWhenMissing() {
+        when(userRepository.findById(1L)).thenReturn(Optional.empty());
+
+        ApplicationException ex = assertThrows(ApplicationException.class, () -> userProfileService.getCurrentUserProfile(1L));
+
+        assertEquals("USER_NOT_FOUND", ex.getCode());
     }
 
-    @Transactional
-    public FineDtos.FineResponse markLostBookFine(Long borrowId, Long userId, Long bookId) {
-        return map(upsertFine(borrowId, userId, bookId, LOST_BOOK_FLAT_FINE, "Lost book fine", "PENDING"));
+    @Test
+    void getCurrentUserProfile_shouldReturnProfileWithRoles() {
+        when(userRepository.findById(1L)).thenReturn(Optional.of(user(1L, "ACTIVE")));
+        when(userRepository.getRoles(1L)).thenReturn(Set.of("USER"));
+
+        UserDtos.UserProfileResponse response = userProfileService.getCurrentUserProfile(1L);
+
+        assertEquals("Alice", response.name());
+        assertEquals(Set.of("USER"), response.roles());
     }
 
-    private FineRepository.FineRecord upsertFine(Long borrowId, Long userId, Long bookId, BigDecimal amount, String reason, String status) {
-        FineRepository.FineRecord fine = fineRepository.findByBorrowId(borrowId)
-                .map(existing -> {
-                    fineRepository.updateFine(existing.id(), amount, reason, status, LocalDate.now());
-                    return fineRepository.findById(existing.id()).orElseThrow();
-                })
-                .orElseGet(() -> {
-                    Long id = fineRepository.create(borrowId, userId, bookId, amount, reason, status, LocalDate.now());
-                    return fineRepository.findById(id).orElseThrow();
-                });
-        log.info("Fine updated: fineId={}, userId={}, amount={}", fine.id(), fine.userId(), fine.amount());
-        notifyFineReminder(fine);
-        return fine;
+    @Test
+    void updateCurrentUserProfile_shouldAuditAndReload() {
+        when(userRepository.findById(1L)).thenReturn(Optional.of(user(1L, "ACTIVE")));
+        when(userRepository.getRoles(1L)).thenReturn(Set.of("USER"));
+
+        UserDtos.UpdateProfileRequest request = new UserDtos.UpdateProfileRequest("Alice", "9999999999");
+        UserDtos.UserProfileResponse response = userProfileService.updateCurrentUserProfile(1L, request, "127.0.0.1", "JUnit");
+
+        assertEquals("Alice", response.name());
+        verify(userRepository).updateProfile(1L, "Alice", "9999999999");
+        verify(userRepository).auditLog(1L, "UPDATE_PROFILE", "127.0.0.1", "JUnit");
+        verify(userRepository, times(1)).findById(1L);
+        verify(userRepository, times(1)).getRoles(1L);
     }
 
-    private void notifyFineReminder(FineRepository.FineRecord fine) {
-        try {
-            UserClient.UserNotificationContact contact = fetchUserContactOrNull(fine.userId());
-            if (contact == null || contact.email() == null || contact.email().isBlank()) {
-                log.warn("Skipping fine reminder for fineId {}: no email for userId {}", fine.id(), fine.userId());
-                return;
-            }
-            String displayName = contact.name() != null && !contact.name().isBlank() ? contact.name() : "Library user";
-            notificationClient.sendFineReminder(new NotificationClient.FineReminderRequest(
-                    contact.email(),
-                    displayName,
-                    fine.userId(),
-                    fine.id(),
-                    fine.amount(),
-                    fine.reason()
-            ));
-        } catch (Exception ex) {
-            log.warn("Failed to notify fine reminder for fineId {}: {}", fine.id(), ex.getMessage());
-        }
+    @Test
+    void getUserEligibility_shouldReturnUserNotActive() {
+        when(userRepository.findById(2L)).thenReturn(Optional.of(user(2L, "INACTIVE")));
+
+        UserDtos.UserEligibilityResponse response = userProfileService.getUserEligibility(2L);
+
+        assertEquals(false, response.eligible());
+        assertEquals("USER_NOT_ACTIVE", response.reason());
     }
 
-    /** Loads email/name from user-service (users DB). Returns null if user missing or call fails. */
-    private UserClient.UserNotificationContact fetchUserContactOrNull(Long userId) {
-        try {
-            var response = userClient.getProfileSummary(userId);
-            if (response == null || response.data() == null) {
-                return null;
-            }
-            return response.data();
-        } catch (Exception ex) {
-            log.warn("Could not load user profile for userId {}: {}", userId, ex.getMessage());
-            return null;
-        }
+    @Test
+    void getUserEligibility_shouldReturnUserActive() {
+        when(userRepository.findById(2L)).thenReturn(Optional.of(user(2L, "ACTIVE")));
+
+        UserDtos.UserEligibilityResponse response = userProfileService.getUserEligibility(2L);
+
+        assertTrue(response.eligible());
+        assertEquals("USER_ACTIVE", response.reason());
     }
 
-    private FineDtos.FineResponse map(FineRepository.FineRecord r) {
-        return new FineDtos.FineResponse(
-                r.id(), r.borrowId(), r.userId(), r.bookId(), r.amount(), r.reason(), r.status(), r.lastCalculatedDate(), r.updatedAt()
-        );
+    @Test
+    void getUserEligibility_shouldThrowWhenMissing() {
+        when(userRepository.findById(99L)).thenReturn(Optional.empty());
+
+        ApplicationException ex = assertThrows(ApplicationException.class, () -> userProfileService.getUserEligibility(99L));
+
+        assertEquals("USER_NOT_FOUND", ex.getCode());
     }
-}
 
-@FeignClient(name = "user-service")
-public interface UserClient {
+    @Test
+    void getNotificationContact_shouldReturnMinimalProfile() {
+        when(userRepository.findById(3L)).thenReturn(Optional.of(user(3L, "ACTIVE")));
 
-    @GetMapping("/api/v1/internal/users/{userId}/profile-summary")
-    ApiResponse<UserNotificationContact> getProfileSummary(@PathVariable("userId") Long userId);
+        UserDtos.UserNotificationContactResponse response = userProfileService.getNotificationContact(3L);
 
-    /** Mirrors user-service {@code UserNotificationContactResponse} JSON for Feign decoding. */
-    record UserNotificationContact(String email, String name) {}
+        assertEquals("alice@example.com", response.email());
+        assertEquals("Alice", response.name());
+    }
+
+    @Test
+    void getNotificationContact_shouldThrowWhenMissing() {
+        when(userRepository.findById(3L)).thenReturn(Optional.empty());
+
+        ApplicationException ex = assertThrows(ApplicationException.class, () -> userProfileService.getNotificationContact(3L));
+
+        assertEquals("USER_NOT_FOUND", ex.getCode());
+    }
+
+    private static UserRepository.UserRecord user(Long id, String status) {
+        return new UserRepository.UserRecord(id, "Alice", "alice@example.com", "9999999999", "hash", status);
+    }
 }
