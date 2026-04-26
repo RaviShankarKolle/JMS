@@ -1,0 +1,95 @@
+header{
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: var(--header-height);
+    background-color: var(--color-bg-light);
+    box-shadow: 0 3px 10px rgba(149, 31, 31, 0.1);
+    z-index: 999;
+    padding: 15px 30px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 2px solid rgb(92,8,8);
+    transition: background var(--transition-speed) ease,
+        color var(--transition-speed) ease;
+    flex-wrap: wrap;
+}
+
+.app.dark header{
+    background-color: var(--color-bg-dark);
+    
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5);
+}
+
+
+header .logo h1{
+    font-size: 1.8rem;
+    text-transform: capitalize;
+    color: #ff4d4d;
+    margin: 10px 0;
+    text-align: center;
+    letter-spacing: 0.5px;
+    transition: 0.3s ease;
+}
+
+
+header .header-controls{
+    display: flex;
+    gap: 15px;
+    align-items: center;
+    flex-wrap: wrap;
+
+}
+
+header .header-controls input[type="text"]:focus{
+    border-color: var(--color-accent);
+
+    box-shadow: 0 0 8px rgba(255, 77, 77, 0.2);
+}
+/*
+header .header-controls select{
+    padding: 10px 14px;
+    border: 1px solid #ccc;
+    border-radius: 10px;
+    outline: none;
+    font-size: 0.95rem;
+    transition: all var(--transition-speed) ease;
+
+}
+    */
+header .header-controls select:focus{
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px rgba(255, 77, 77, 0.2);
+}
+
+header .header-controls label{
+    display: flex;
+    align-items: center;
+    font-size:0.95rem;
+    cursor: pointer;
+    margin-right: 50px;
+
+    
+}
+.logo{
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+
+@media (max-width: 480px){
+    header{
+        height: fit-content;
+    }
+    
+header .header-controls input[type="text"]{
+    padding: 7px 9px;
+    border-radius: 8px;
+}
+
+header .header-controls select{
+    padding: 7px 9px;
+    border-radius: 8px;
+}
+}

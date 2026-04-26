@@ -1,0 +1,116 @@
+:root {
+  --color-bg-light: #f5f5f5;
+  --color-bg-dark: #121212;
+  --color-card-light: #ffffff;
+  --color-card-dark: #1e1e1e;
+  --color-text-light: #1a1a1a;
+  --color-text-dark: #f5f5f5;
+  --color-accent: #ff4d4d;
+  --color-accent-hover: #ff6e6e;
+  --color-overlay: rgba(0, 0, 0, 0.8);
+  --transition-speed: 0.3s;
+  --shadow-light: 0 8px 25px rgba(0, 0, 0, 0.1);
+  --shadow-dark: 0 8px 25px rgba(0, 0, 0, 0.5);
+  --header-height: 80px;
+}
+.app {
+  min-height: 100vh;
+  font-family: sans-serif;
+  background-color: var(--color-bg-light);
+  color: var(--color-text-light);
+  padding-top: var(--header-height);
+  padding-bottom: 25px;
+  transition: background  var(--transition-speed) ease;
+}
+
+body{
+  margin: 0;
+  padding: 0;
+}
+.app.dark {
+  background-color: var(--color-bg-dark);
+  color: var(--color-text-dark);
+}
+/*Load More MOvies button*/
+
+.load-more-btn{
+  display: block;
+  margin:  auto;
+  margin-top: 25px;
+  padding: 12px 25px;
+  font-weight:600;
+  font-size:1rem;
+  border-radius: 8px;
+  border: 2px solid #ff4d4d;
+  background-color: transparent;
+  color: #ff4d4d;
+  cursor: pointer;
+  
+}
+
+.load-more-btn:disabled{
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.load-more-btn:hover{
+  background-color: #ff4d4d;
+  color:#fff;
+  transform:scale(1.05);
+  transition: transform 0.3s ease;
+}
+
+
+/*MOvie List*/
+
+.movie-list{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  justify-items: center;
+  gap: 25px;
+  margin-top: 50px;
+}
+
+.no-results-page{
+  max-width: 650px;
+  margin: 60px auto 0;
+  padding: 24px;
+  text-align: center;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: var(--shadow-light);
+}
+
+.no-results-page h2,
+.no-results-page p{
+  color: var(--color-text-light);
+}
+
+.app.dark .no-results-page{
+  background: rgba(30, 30, 30, 0.9);
+  box-shadow: var(--shadow-dark);
+}
+
+.app.dark .no-results-page h2,
+.app.dark .no-results-page p{
+  color: var(--color-text-dark);
+}
+
+.status-message{
+  text-align: center;
+  margin-top: 24px;
+  font-size: 1rem;
+}
+
+.status-message.error{
+  color: #ff4d4d;
+}
+
+@media (max-width: 480px){
+  
+.movie-list{
+  display: grid;
+  grid-template-columns:1fr 1fr;
+  margin-top: 100px;
+}
+}
