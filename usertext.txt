@@ -1,32 +1,140 @@
-Borrow Service Functionalities
-Create borrow record for a user and book with start/end dates.
-Validate borrow rules (for example: user eligibility/status and borrowing constraints).
-Retrieve borrow details/history (including user-specific history with pagination).
-Update borrow lifecycle states (active, returned, overdue handling).
-Trigger overdue processing through scheduled jobs.
-Integrate with notification service for borrow confirmation and reminder-related flows.
-Expose REST APIs through gateway route (/api/v1/borrows/**).
-Provide Swagger/OpenAPI docs (/swagger-ui.html, /v3/api-docs and gateway docs path).
-Include JUnit/Mockito unit tests for service/business logic and major scenarios.
+Movie Website
 
+A React-based movie browsing app powered by the TMDB API.
+Users can search movies, sort results, load more items with pagination, switch dark/light mode, and view full movie details in a modal.
 
-Fine-Payment Service Functionalities
-Calculate and manage fines for overdue/lost-book scenarios.
-Create and track fine records per user/borrow context.
-Process fine payments and update fine status after payment.
-Provide endpoints for outstanding fines and payment history.
-Support scheduled/triggered reminder-related fine workflows.
-Integrate directly with notification service for fine reminder/payment update notifications.
-Expose REST APIs through gateway route (/api/v1/fines/**).
-Provide Swagger/OpenAPI docs (/swagger-ui.html, /v3/api-docs and gateway docs path).
-Include JUnit/Mockito unit tests for fine calculation and payment business flows.
-Notification Service Functionalities
-Send registration notifications.
-Send borrow confirmation and overdue notifications.
-Send fine reminder/payment-related notifications.
-Provide REST endpoints for notification requests from other services.
-Run scheduled reminder processing for pending notifications.
-SMTP-based email sending integration.
-Expose REST APIs through gateway route (/api/v1/notifications/**).
-Provide Swagger/OpenAPI docs (/swagger-ui.html, /v3/api-docs and gateway docs path).
-Include JUnit/Mockito unit tests for notification dispatch and scheduler scenarios.
+## Features
+
+- Search movies by title
+- Sort movies by:
+  - Year Ascending
+  - Year Descending
+  - Popular Movie List (rating-based in UI)
+- Load more movies with pagination
+- Movie details popup/modal
+- Dark mode / Light mode toggle
+- Error and loading states
+- Unit tests with Jest + React Testing Library
+
+## Tech Stack
+
+- React
+- Vite
+- JavaScript (ES6+)
+- CSS3
+- TMDB API
+- Jest
+- React Testing Library
+
+## Project Structure
+
+```bash
+src/
+  components/
+    Header.jsx
+    MovieCard.jsx
+    MovieModal.jsx
+    styles/
+  hooks/
+    useMovies.js
+  pages/
+    HomePage.jsx
+    SearchPage.jsx
+    MovieDetailsPage.jsx
+    NoResults.jsx
+  services/
+    tmdbService.js
+  tests/
+    AppStates.test.jsx
+    SearchBehavior.test.jsx
+    SearchBar.test.jsx
+    HomePageFlow.test.jsx
+    MovieCard.test.jsx
+    setupTests.js
+  App.jsx
+```
+
+## Getting Started
+
+### 1) Clone the repository
+
+```bash
+git clone <your-repo-url>
+cd movie-website
+```
+
+### 2) Install dependencies
+
+```bash
+npm install
+```
+
+### 3) Add environment variables
+
+Create a `.env` file in the root folder and add:
+
+```env
+VITE_TMDB_API_KEY=your_tmdb_api_key_here
+```
+
+You can get an API key from [TMDB](https://www.themoviedb.org/settings/api).
+
+### 4) Run the app locally
+
+```bash
+npm run dev
+```
+
+Then open the local URL shown in terminal (usually `http://localhost:5173`).
+
+## Available Scripts
+
+```bash
+npm run dev       # Start development server
+npm run build     # Build for production
+npm run preview   # Preview production build locally
+npm test          # Run unit tests
+```
+
+## How It Works (High-Level Flow)
+
+1. User types in search bar (`Header`)
+2. `searchTerm` updates in `useMovies` hook
+3. Hook triggers fetch via `tmdbService`
+4. API response is mapped to app-friendly movie model
+5. `displayMovies` is rendered in `HomePage` / `SearchPage`
+6. Clicking a movie opens modal with full details
+
+## Testing
+
+This project uses Jest + React Testing Library.
+
+Main test files include:
+
+- `SearchBar.test.jsx`
+- `MovieCard.test.jsx`
+- `HomePageFlow.test.jsx`
+- `SearchBehavior.test.jsx`
+- `AppStates.test.jsx`
+
+Run all tests:
+
+```bash
+npm test
+```
+
+## Future Improvements
+
+- Debounced search input
+- Server-side sorting consistency across pages
+- Better accessibility for form controls and modal
+- Persist dark mode in localStorage
+- Add integration/e2e tests
+
+## Author
+
+Developed by **[Your Name]**.
+
+## License
+
+This project is licensed under the MIT License.
